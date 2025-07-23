@@ -1,0 +1,420 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import subprocess
+import os
+import threading
+from pathlib import Path
+import json
+
+class FFmpegConverter:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("FFmpeg Converter")
+        self.root.geometry("750x740")
+        self.root.resizable(True, True)
+        # Путь к FFmpeg (через PATH)
+        self.ffmpeg_path = "ffmpeg"
+        self.ffprobe_path = "ffprobe"
+        # Стили
+        self.setup_styles()
+        # Переменные
+        self.input_file = tk.StringVar()
+        self.output_file = tk.StringVar()
+        self.video_codec = tk.StringVar(value="libvvenc")
+        self.video_preset = tk.StringVar(value="medium")
+        self.video_bitrate = tk.StringVar(value="384k")
+        self.video_resolution = tk.StringVar(value="1280x720")
+        self.video_quality = tk.StringVar(value="25")
+        self.video_fps = tk.StringVar(value="30")
+        self.audio_codec = tk.StringVar(value="libopus")
+        self.audio_bitrate = tk.StringVar(value="64k")
+        # Создание интерфейса
+        self.create_widgets()
+        # Проверка наличия FFMPEG
+        self.check_ffmpeg()
+
+    def setup_styles(self):
+        style = ttk.Style()
+        style.theme_use('clam')
+        # Настройка цветов
+        style.configure('TFrame', background='#f0f0f0')
+        style.configure('TLabel', background='#f0f0f0', font=('Segoe UI', 10))
+        style.configure('TButton', font=('Segoe UI', 10), padding=6)
+        style.configure('Header.TLabel', font=('Segoe UI', 16, 'bold'), foreground='#2c3e50')
+        style.configure('Title.TLabel', font=('Segoe UI', 12, 'bold'), foreground='#34495e')
+        # Цвета для виджетов
+        style.map('TButton',
+                 background=[('active', '#3498db'), ('!active', '#2980b9')],
+                 foreground=[('active', 'white'), ('!active', 'white')])
+
+    def create_widgets(self):
+        # Главный фрейм
+        main_frame = ttk.Frame(self.root, padding="20")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # Заголовок
+        header_label = ttk.Label(main_frame, text="FFmpeg Converter", style='Header.TLabel')
+        header_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        # Файлы
+        self.create_file_section(main_frame)
+        # Видео параметры
+        self.create_video_section(main_frame)
+        # Аудио параметры
+        self.create_audio_section(main_frame)
+        # Кнопки управления
+        self.create_control_section(main_frame)
+        # Прогресс и логи
+        self.create_progress_section(main_frame)
+        # Конфигурация сетки
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+
+    def create_file_section(self, parent):
+        frame = ttk.LabelFrame(parent, text="Файлы", padding="10")
+        frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        frame.columnconfigure(1, weight=1)
+        # Входной файл
+        ttk.Label(frame, text="Входной файл:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(frame, textvariable=self.input_file, state='readonly').grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 5), pady=2)
+        ttk.Button(frame, text="Обзор", command=self.browse_input).grid(row=0, column=2, pady=2)
+        # Выходной файл
+        ttk.Label(frame, text="Выходной файл:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(frame, textvariable=self.output_file, state='readonly').grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 5), pady=2)
+        ttk.Button(frame, text="Обзор", command=self.browse_output).grid(row=1, column=2, pady=2)
+
+    def create_video_section(self, parent):
+        frame = ttk.LabelFrame(parent, text="Параметры видео", padding="10")
+        frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        frame.columnconfigure(1, weight=1)
+        # Кодек
+        ttk.Label(frame, text="Кодек:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        codec_frame = ttk.Frame(frame)
+        codec_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=2)
+        ttk.Combobox(codec_frame, textvariable=self.video_codec, 
+                    values=["libvvenc", "libx265", "libaom-av1"], 
+                    state="readonly", width=15).pack(side=tk.LEFT)
+        ttk.Label(codec_frame, text=" (H.266 по умолчанию)").pack(side=tk.LEFT, padx=(5, 0))
+        # Пресет
+        ttk.Label(frame, text="Пресет:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        preset_frame = ttk.Frame(frame)
+        preset_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=2)
+        ttk.Combobox(preset_frame, textvariable=self.video_preset, 
+                    values=["faster", "fast", "medium", "slow", "slower"], 
+                    state="readonly", width=15).pack(side=tk.LEFT)
+        ttk.Label(preset_frame, text=" (medium по умолчанию)").pack(side=tk.LEFT, padx=(5, 0))
+        # Битрейт
+        ttk.Label(frame, text="Битрейт:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        bitrate_frame = ttk.Frame(frame)
+        bitrate_frame.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=2)
+        ttk.Entry(bitrate_frame, textvariable=self.video_bitrate, width=15).pack(side=tk.LEFT)
+        ttk.Label(bitrate_frame, text=" (по умолчанию: 384k)").pack(side=tk.LEFT, padx=(5, 0))
+        # Разрешение
+        ttk.Label(frame, text="Разрешение:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        resolution_frame = ttk.Frame(frame)
+        resolution_frame.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=2)
+        ttk.Entry(resolution_frame, textvariable=self.video_resolution, width=15).pack(side=tk.LEFT)
+        ttk.Label(resolution_frame, text=" (например: 1920x1080)").pack(side=tk.LEFT, padx=(5, 0))
+        # FPS
+        ttk.Label(frame, text="FPS:").grid(row=5, column=0, sticky=tk.W, pady=2)
+        fps_frame = ttk.Frame(frame)
+        fps_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=2)
+        ttk.Entry(fps_frame, textvariable=self.video_fps, width=15).pack(side=tk.LEFT)
+        ttk.Label(fps_frame, text=" (по умолчанию: 30)").pack(side=tk.LEFT, padx=(5, 0))
+
+    def create_audio_section(self, parent):
+        frame = ttk.LabelFrame(parent, text="Параметры аудио", padding="10")
+        frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
+        frame.columnconfigure(1, weight=1)
+        # Кодек
+        ttk.Label(frame, text="Кодек:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        codec_frame = ttk.Frame(frame)
+        codec_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=2)
+        ttk.Combobox(codec_frame, textvariable=self.audio_codec, 
+                    values=["libopus", "aac", "mp3", "ac3", "vorbis"], 
+                    state="readonly", width=12).pack(side=tk.LEFT)
+        ttk.Label(codec_frame, text=" (по умолчанию: Opus)").pack(side=tk.LEFT, padx=(5, 0))
+        # Битрейт
+        ttk.Label(frame, text="Битрейт:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        audio_bitrate_frame = ttk.Frame(frame)
+        audio_bitrate_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=2)
+        ttk.Entry(audio_bitrate_frame, textvariable=self.audio_bitrate, width=15).pack(side=tk.LEFT)
+        ttk.Label(audio_bitrate_frame, text=" (по умолчанию: 64k)").pack(side=tk.LEFT, padx=(5, 0))
+
+    def create_control_section(self, parent):
+        frame = ttk.Frame(parent)
+        frame.grid(row=4, column=0, columnspan=3, pady=(0, 10))
+        self.convert_button = ttk.Button(frame, text="Начать конвертацию", command=self.start_conversion)
+        self.convert_button.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(frame, text="Остановить", command=self.stop_conversion, state='disabled').pack(side=tk.LEFT)
+
+    def create_progress_section(self, parent):
+        frame = ttk.LabelFrame(parent, text="Прогресс и логи", padding="2")
+        frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+        # Прогресс бар
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(frame, variable=self.progress_var, maximum=100)
+        self.progress_bar.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        # Текстовое поле для логов
+        self.log_text = tk.Text(frame, height=18, wrap=tk.WORD, font=('Consolas', 8))
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+        self.log_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
+        # Создание контекстного меню и биндингов
+        self.create_context_menu()
+        parent.rowconfigure(5, weight=1)
+
+    def create_context_menu(self):
+        """Создание контекстного меню для текстового поля лога"""
+        self.context_menu = tk.Menu(self.log_text, tearoff=0)
+        self.context_menu.add_command(label="Копировать", command=self.copy_text)
+        self.context_menu.add_command(label="Выделить всё", command=self.select_all_text)
+        # Привязка события правой кнопки мыши
+        self.log_text.bind("<Button-3>", self.show_context_menu)
+        # Привязка горячих клавиш
+        self.log_text.bind("<Control-a>", lambda event: self.select_all_text())
+        self.log_text.bind("<Control-A>", lambda event: self.select_all_text())
+        self.log_text.bind("<Control-c>", lambda event: self.copy_text())
+        self.log_text.bind("<Control-C>", lambda event: self.copy_text())
+
+    def show_context_menu(self, event):
+        """Показ контекстного меню"""
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+
+    def copy_text(self):
+        """Копирование выделенного текста в буфер обмена"""
+        try:
+            selected_text = self.log_text.get(tk.SEL_FIRST, tk.SEL_LAST)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selected_text)
+        except tk.TclError:
+            # Если ничего не выделено, ничего не делаем
+            pass
+
+    def select_all_text(self):
+        """Выделение всего текста"""
+        self.log_text.tag_add(tk.SEL, "1.0", tk.END)
+        self.log_text.mark_set(tk.INSERT, "1.0")
+        self.log_text.see(tk.INSERT)
+        return "break"  # Предотвращаем дальнейшую обработку события
+
+    def browse_input(self):
+        filename = filedialog.askopenfilename(
+            title="Выберите входной файл",
+            filetypes=[
+                ("Все файлы", "*.*"),
+                ("Видео файлы", "*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm *.m4v *.mts *.m2ts"),
+                ("Аудио файлы", "*.mp3 *.wav *.aac *.flac *.m4a *.ogg *.opus")
+            ]
+        )
+        if filename:
+            self.input_file.set(filename)
+            if not self.output_file.get():
+                input_path = Path(filename)
+                output_path = input_path.parent / f"{input_path.stem}_converted.mp4"
+                self.output_file.set(str(output_path))
+            # Автоматическое определение параметров видео
+            self.auto_detect_video_params(filename)
+
+    def browse_output(self):
+        filename = filedialog.asksaveasfilename(
+            title="Сохранить как",
+            defaultextension=".mp4",
+            filetypes=[("MP4 файлы", "*.mp4"), ("MKV файлы", "*.mkv"), ("Все файлы", "*.*")]
+        )
+        if filename:
+            self.output_file.set(filename)
+
+    def auto_detect_video_params(self, filepath):
+        """Автоматическое определение параметров видео"""
+        video_info = self.get_video_info(filepath)
+        if video_info:
+            if video_info['resolution']:
+                self.video_resolution.set(video_info['resolution'])
+                self.log(f"Определено разрешение: {video_info['resolution']}")
+            if video_info['fps']:
+                self.video_fps.set(video_info['fps'])
+                self.log(f"Определено FPS: {video_info['fps']}")
+        else:
+            self.log("Не удалось автоматически определить параметры видео", "warning")
+
+    def get_video_info(self, filepath):
+        """Получение информации о видео файле"""
+        try:
+            if not os.path.exists(filepath):
+                return None
+            cmd = [
+                self.ffprobe_path,
+                '-v', 'quiet',
+                '-print_format', 'json',
+                '-show_streams',
+                filepath
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                # Поиск видео потока
+                for stream in data.get('streams', []):
+                    if stream.get('codec_type') == 'video':
+                        # Получение разрешения
+                        width = stream.get('width')
+                        height = stream.get('height')
+                        resolution = f"{width}x{height}" if width and height else None
+                        # Получение FPS
+                        avg_frame_rate = stream.get('avg_frame_rate')
+                        fps = None
+                        if avg_frame_rate and avg_frame_rate != '0/0':
+                            try:
+                                num, den = map(int, avg_frame_rate.split('/'))
+                                if den != 0:
+                                    fps = str(int(num / den))
+                            except:
+                                pass
+                        return {
+                            'resolution': resolution,
+                            'fps': fps
+                        }
+            return None
+        except Exception as e:
+            self.log(f"Ошибка при получении информации о видео: {e}", "warning")
+            return None
+
+    def check_ffmpeg(self):
+        try:
+            # Проверяем наличие ffmpeg в PATH
+            subprocess.run([self.ffmpeg_path, '-version'], 
+                          capture_output=True, text=True, timeout=10)
+            self.log(f"FFmpeg найден в PATH")
+            
+            # Проверяем версию
+            result = subprocess.run([self.ffmpeg_path, '-version'], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                version_info = result.stdout.split('\n')[0]
+                self.log(f"Версия: {version_info}")
+                # Проверяем доступные кодеки
+                result = subprocess.run([self.ffmpeg_path, '-encoders'], 
+                                      capture_output=True, text=True, timeout=15)
+                available_encoders = result.stdout
+                encoders_info = []
+                if 'libvvenc' in available_encoders:
+                    encoders_info.append("✓ libvvenc (H.266/VVC)")
+                if 'libx265' in available_encoders:
+                    encoders_info.append("✓ libx265 (H.265)")
+                if 'libx264' in available_encoders:
+                    encoders_info.append("✓ libx264 (H.264)")
+                if 'libaom-av1' in available_encoders:
+                    encoders_info.append("✓ libaom-av1 (AV1)")
+                if encoders_info:
+                    self.log("Доступные видеокодеки: " + ", ".join(encoders_info))
+                else:
+                    self.log("Не найдено поддерживаемых видеокодеков!", "warning")
+            else:
+                raise Exception("FFmpeg вернул ошибку")
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+            self.log(f"Ошибка: {e}", "error")
+            messagebox.showerror("Ошибка", 
+                               f"FFmpeg не найден или недоступен в PATH: {e}")
+
+    def log(self, message, level="info"):
+        if level == "error":
+            tag = "ERROR: "
+            color = "red"
+        elif level == "warning":
+            tag = "WARNING: "
+            color = "orange"
+        else:
+            tag = ""
+            color = "black"
+        self.log_text.insert(tk.END, f"{tag}{message}\n")
+        self.log_text.see(tk.END)
+        self.log_text.update_idletasks()
+
+    def build_ffmpeg_command(self):
+        input_file = self.input_file.get()
+        output_file = self.output_file.get()
+        if not input_file or not output_file:
+            raise ValueError("Необходимо указать входной и выходной файлы")
+        if not os.path.exists(input_file):
+            raise FileNotFoundError(f"Входной файл не найден: {input_file}")
+        # Основная команда
+        cmd = [
+            self.ffmpeg_path,
+            '-i', input_file,
+            '-c:v', self.video_codec.get(),
+            '-preset', self.video_preset.get(),
+            '-b:v', self.video_bitrate.get(),
+            '-s', self.video_resolution.get(),
+            '-r', self.video_fps.get(),
+            '-c:a', self.audio_codec.get(),
+            '-b:a', self.audio_bitrate.get(),
+            '-y',  # Перезаписывать файл без подтверждения
+            output_file
+        ]
+        return cmd
+
+    def start_conversion(self):
+        try:
+            cmd = self.build_ffmpeg_command()
+            self.log(f"Команда: {' '.join(cmd)}")
+            # Отключаем кнопку конвертации
+            self.convert_button.config(state='disabled', text="Конвертация...")
+            # Запуск в отдельном потоке
+            self.conversion_thread = threading.Thread(target=self.run_conversion, args=(cmd,))
+            self.conversion_thread.daemon = True
+            self.conversion_thread.start()
+        except ValueError as e:
+            self.log(f"Ошибка: {e}", "error")
+            messagebox.showerror("Ошибка", str(e))
+        except Exception as e:
+            self.log(f"Ошибка при запуске конвертации: {e}", "error")
+            messagebox.showerror("Ошибка", f"Ошибка при запуске конвертации: {e}")
+
+    def run_conversion(self, cmd):
+        try:
+            # Запуск процесса
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1
+            )
+            # Чтение вывода построчно
+            while True:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None:
+                    break
+                if output:
+                    self.log(output.strip())
+            # Проверка результата
+            return_code = process.poll()
+            if return_code == 0:
+                self.log("Конвертация завершена успешно!", "info")
+                messagebox.showinfo("Успех", "Конвертация завершена успешно!")
+            else:
+                self.log(f"Ошибка конвертации. Код возврата: {return_code}", "error")
+                messagebox.showerror("Ошибка", f"Конвертация завершена с ошибкой. Код: {return_code}")
+        except Exception as e:
+            self.log(f"Ошибка выполнения: {e}", "error")
+            messagebox.showerror("Ошибка", f"Ошибка выполнения: {e}")
+        finally:
+            # Включаем кнопку обратно
+            self.convert_button.config(state='normal', text="Начать конвертацию")
+
+    def stop_conversion(self):
+        # TODO: Реализация остановки процесса
+        self.log("Остановка конвертации не реализована", "warning")
+
+def main():
+    root = tk.Tk()
+    app = FFmpegConverter(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
