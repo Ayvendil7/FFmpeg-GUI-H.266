@@ -6,44 +6,68 @@ import threading
 from pathlib import Path
 import json
 import time
+import re # Для парсинга версии FFmpeg
 
 class FFmpegConverter:
     def __init__(self, root):
         self.root = root
         self.root.title("FFmpeg Converter")
-        self.root.geometry("900x850")
-        self.root.minsize(800, 700)
+        self.root.geometry("900x900") # Увеличил размер окна
+        self.root.minsize(800, 700) # Минимальный размер
         self.root.resizable(True, True)
         
-        # Настройка стиля
-        self.setup_styles()
-        
         # Путь к FFmpeg
-        self.ffmpeg_path = r"C:\media-autobuild_suite-master\local64\bin-video\ffmpeg.exe"
+        self.ffmpeg_path = r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"
+        # Проверим, существует ли по указанному пути, иначе попробуем найти в PATH
         if not os.path.exists(self.ffmpeg_path):
-            self.ffmpeg_path = "ffmpeg"  # Попробуем найти в PATH
+            self.ffmpeg_path = "ffmpeg" # Будем искать в PATH
             
         # Процесс конвертации
         self.current_process = None
         self.start_time = None
         
+        # Словарь для отображения пользовательских названий кодеков
+        self.codec_display_names = {
+            "libvvenc": "H.266 (libvvenc)",
+            "libx265": "H.265 (libx265)",
+            "libx264": "H.264 (libx264)",
+            "librav1e": "AV1 (librav1e)",
+            "libvpx-vp9": "VP9 (libvpx-vp9)",
+            "libaom-av1": "AV1 (libaom-av1)", # На случай, если будет добавлен
+            # Аудио кодеки
+            "libopus": "Opus (libopus)",
+            "aac": "AAC",
+            "libvorbis": "Vorbis (libvorbis)",
+            "mp3": "MP3",
+            "ac3": "AC3"
+            # Можно добавить больше по необходимости
+        }
+        
+        # Информация о FFmpeg и кодеках
+        self.ffmpeg_version_info = ""
+        self.ffmpeg_build_config = ""
+        self.supported_encoders = []
+
+        # Стили
+        self.setup_styles()
+        
         # Переменные
         self.input_file = tk.StringVar()
         self.output_file = tk.StringVar()
-        self.video_codec = tk.StringVar(value="libvvenc")
+        self.video_codec = tk.StringVar(value="libvvenc") # Используем техническое имя
         self.video_preset = tk.StringVar(value="medium")
         self.video_bitrate = tk.StringVar(value="384k")
         self.video_resolution = tk.StringVar(value="1280x720")
         self.video_quality = tk.StringVar(value="25")
         self.video_fps = tk.StringVar(value="30")
-        self.audio_codec = tk.StringVar(value="libopus")
+        self.audio_codec = tk.StringVar(value="libopus") # Используем техническое имя
         self.audio_bitrate = tk.StringVar(value="64k")
         
         # Создание интерфейса
         self.create_widgets()
         
-        # Проверка наличия FFMPEG
-        self.check_ffmpeg()
+        # Проверка наличия FFMPEG и получение информации
+        self.check_ffmpeg_and_codecs()
         
     def setup_styles(self):
         style = ttk.Style()
@@ -142,6 +166,12 @@ class FFmpegConverter:
         header_label = ttk.Label(header_frame, text="FFmpeg Video Converter", style='Header.TLabel')
         header_label.pack(side=tk.LEFT)
         
+        # Кнопка информации о FFmpeg
+        self.info_button = ttk.Button(header_frame, text="Инфо о FFmpeg", 
+                                    command=self.show_ffmpeg_info,
+                                    style='Secondary.TButton')
+        self.info_button.pack(side=tk.RIGHT)
+        
         # Основной контент
         content_frame = ttk.Frame(main_container, style='Card.TFrame')
         content_frame.pack(fill=tk.BOTH, expand=True)
@@ -196,20 +226,28 @@ class FFmpegConverter:
         frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
         frame.columnconfigure(1, weight=1)
         
-        # Кодек
+        # Кодек (с пользовательскими названиями)
         ttk.Label(frame, text="Кодек:").grid(row=0, column=0, sticky=tk.W, pady=5)
         codec_frame = ttk.Frame(frame)
         codec_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
-        ttk.Combobox(codec_frame, textvariable=self.video_codec, 
-                    values=["libvvenc", "libx265", "librav1e", "libvp9"], 
-                    state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Получаем список пользовательских названий для видео кодеков
+        video_codec_options = [self.codec_display_names.get(c, c) for c in ["libvvenc", "libx265", "libx264", "librav1e", "libvpx-vp9"]]
+        self.video_codec_combobox = ttk.Combobox(codec_frame, 
+                                                values=video_codec_options, 
+                                                state="readonly")
+        # Установим начальное значение на основе текущего video_codec
+        initial_display_name = self.codec_display_names.get(self.video_codec.get(), self.video_codec.get())
+        self.video_codec_combobox.set(initial_display_name)
+        self.video_codec_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Привязываем событие выбора
+        self.video_codec_combobox.bind("<<ComboboxSelected>>", self.on_video_codec_change)
         
         # Пресет
         ttk.Label(frame, text="Пресет:").grid(row=1, column=0, sticky=tk.W, pady=5)
         preset_frame = ttk.Frame(frame)
         preset_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Combobox(preset_frame, textvariable=self.video_preset, 
-                    values=["faster", "fast", "medium", "slow", "slower"], 
+                    values=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], 
                     state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         # Битрейт
@@ -230,18 +268,38 @@ class FFmpegConverter:
         fps_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Entry(fps_frame, textvariable=self.video_fps).pack(side=tk.LEFT, fill=tk.X, expand=True)
         
+    def on_video_codec_change(self, event):
+        """Обработчик изменения выбора видео кодека"""
+        selected_display_name = self.video_codec_combobox.get()
+        # Найдем техническое имя по пользовательскому
+        for tech_name, disp_name in self.codec_display_names.items():
+            if disp_name == selected_display_name:
+                self.video_codec.set(tech_name)
+                return
+        # Если не нашли, возможно, пользователь ввел что-то вручную (маловероятно при readonly)
+        # В этом случае просто установим как есть
+        self.video_codec.set(selected_display_name)
+
     def create_audio_section(self, parent):
         frame = ttk.LabelFrame(parent, text="Параметры аудио", padding="15")
         frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         frame.columnconfigure(1, weight=1)
         
-        # Кодек
+        # Кодек (с пользовательскими названиями)
         ttk.Label(frame, text="Кодек:").grid(row=0, column=0, sticky=tk.W, pady=5)
         codec_frame = ttk.Frame(frame)
         codec_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
-        ttk.Combobox(codec_frame, textvariable=self.audio_codec, 
-                    values=["libopus", "aac", "mp3", "ac3", "libvorbis"], 
-                    state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Получаем список пользовательских названий для аудио кодеков
+        audio_codec_options = [self.codec_display_names.get(c, c) for c in ["libopus", "aac", "libvorbis", "mp3", "ac3"]]
+        self.audio_codec_combobox = ttk.Combobox(codec_frame, 
+                                                values=audio_codec_options, 
+                                                state="readonly")
+        # Установим начальное значение на основе текущего audio_codec
+        initial_display_name = self.codec_display_names.get(self.audio_codec.get(), self.audio_codec.get())
+        self.audio_codec_combobox.set(initial_display_name)
+        self.audio_codec_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Привязываем событие выбора
+        self.audio_codec_combobox.bind("<<ComboboxSelected>>", self.on_audio_codec_change)
         
         # Битрейт
         ttk.Label(frame, text="Битрейт:").grid(row=1, column=0, sticky=tk.W, pady=5)
@@ -249,6 +307,17 @@ class FFmpegConverter:
         bitrate_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Entry(bitrate_frame, textvariable=self.audio_bitrate).pack(side=tk.LEFT, fill=tk.X, expand=True)
         
+    def on_audio_codec_change(self, event):
+        """Обработчик изменения выбора аудио кодека"""
+        selected_display_name = self.audio_codec_combobox.get()
+        # Найдем техническое имя по пользовательскому
+        for tech_name, disp_name in self.codec_display_names.items():
+            if disp_name == selected_display_name:
+                self.audio_codec.set(tech_name)
+                return
+        # Аналогично для аудио
+        self.audio_codec.set(selected_display_name)
+
     def create_control_section(self, parent):
         frame = ttk.Frame(parent, style='TFrame')
         frame.pack(fill=tk.X, pady=(15, 15))
@@ -327,17 +396,17 @@ class FFmpegConverter:
         
         # Информация о входном файле
         ttk.Label(frame, text="Входной файл:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.input_info_label = ttk.Label(frame, text="Не выбран")
+        self.input_info_label = ttk.Label(frame, text="Не выбран", background=self.colors['background'])
         self.input_info_label.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
         
         # Информация о выходном файле
         ttk.Label(frame, text="Выходной файл:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.output_info_label = ttk.Label(frame, text="Не создан")
+        self.output_info_label = ttk.Label(frame, text="Не создан", background=self.colors['background'])
         self.output_info_label.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
         
         # Экономия места
         ttk.Label(frame, text="Экономия:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.saving_label = ttk.Label(frame, text="0%")
+        self.saving_label = ttk.Label(frame, text="0%", background=self.colors['background'])
         self.saving_label.grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
         
     def create_context_menu(self):
@@ -485,8 +554,8 @@ class FFmpegConverter:
                 
             # Определяем путь к ffprobe
             ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
-            if not os.path.exists(ffprobe_path):
-                ffprobe_path = "ffprobe"
+            if not os.path.exists(ffprobe_path) or ffprobe_path == "ffprobe": # Если путь не по умолчанию или в PATH
+                 ffprobe_path = "ffprobe"
                 
             cmd = [
                 ffprobe_path,
@@ -529,56 +598,165 @@ class FFmpegConverter:
             self.log(f"Ошибка при получении информации о видео: {e}", "warning")
             return None
             
-    def check_ffmpeg(self):
+    def check_ffmpeg_and_codecs(self):
+        """Проверка наличия FFmpeg и получение информации о кодеках"""
         try:
             # Проверяем наличие ffmpeg
             result = subprocess.run([self.ffmpeg_path, '-version'], 
-                                  capture_output=True, text=True, timeout=10)
+                                  capture_output=True, text=True, timeout=15) # Увеличил таймаут
             if result.returncode == 0:
-                version_info = result.stdout.split('\n')[0]
-                self.log(f"FFmpeg найден: {version_info}")
+                version_lines = result.stdout.split('\n')
+                self.ffmpeg_version_info = version_lines[0] if version_lines else "Неизвестная версия"
                 
+                # Попробуем получить более подробную информацию о сборке
+                build_line = ""
+                for line in version_lines[1:4]: # Проверим первые несколько строк после версии
+                    if 'configuration:' in line:
+                        build_line = line.strip()
+                        break
+                self.ffmpeg_build_config = build_line if build_line else "Информация о сборке недоступна"
+
+                self.log(f"FFmpeg найден: {self.ffmpeg_version_info}")
+                if self.ffmpeg_build_config != "Информация о сборке недоступна":
+                     self.log(f"Сборка: {self.ffmpeg_build_config[:100]}...") # Ограничим длину
+
                 # Проверяем доступные кодеки
                 result = subprocess.run([self.ffmpeg_path, '-encoders'], 
-                                      capture_output=True, text=True, timeout=15)
-                available_encoders = result.stdout
+                                      capture_output=True, text=True, timeout=20) # Увеличил таймаут
+                available_encoders_output = result.stdout
                 
+                self.supported_encoders = []
                 encoders_info = []
-                if 'libvvenc' in available_encoders:
-                    encoders_info.append("✓ libvvenc (H.266/VVC)")
-                if 'libx265' in available_encoders:
-                    encoders_info.append("✓ libx265 (H.265)")
-                if 'librav1e' in available_encoders:
-                    encoders_info.append("✓ librav1e (AV1)")
-                if 'libvp9' in available_encoders:
-                    encoders_info.append("✓ libvp9 (VP9)")
+                # Парсим вывод для поиска нужных кодеков
+                for line in available_encoders_output.split('\n'):
+                    # Ищем строки, описывающие кодеки
+                    if 'libvvenc' in line:
+                        self.supported_encoders.append("libvvenc")
+                        encoders_info.append(self.codec_display_names.get("libvvenc", "libvvenc"))
+                    elif 'libx265' in line:
+                        self.supported_encoders.append("libx265")
+                        encoders_info.append(self.codec_display_names.get("libx265", "libx265"))
+                    elif 'libx264' in line:
+                        self.supported_encoders.append("libx264")
+                        encoders_info.append(self.codec_display_names.get("libx264", "libx264"))
+                    elif 'librav1e' in line:
+                        self.supported_encoders.append("librav1e")
+                        encoders_info.append(self.codec_display_names.get("librav1e", "librav1e"))
+                    elif 'libvpx-vp9' in line:
+                        self.supported_encoders.append("libvpx-vp9")
+                        encoders_info.append(self.codec_display_names.get("libvpx-vp9", "libvpx-vp9"))
+                    elif 'libaom-av1' in line:
+                        self.supported_encoders.append("libaom-av1")
+                        encoders_info.append(self.codec_display_names.get("libaom-av1", "libaom-av1"))
+                    # Аудио кодеки
+                    elif 'libopus' in line and 'libopus' not in self.supported_encoders: # Избегаем дубликатов
+                        self.supported_encoders.append("libopus")
+                        encoders_info.append(self.codec_display_names.get("libopus", "libopus"))
+                    elif 'aac' in line and 'aac' not in self.supported_encoders:
+                        self.supported_encoders.append("aac")
+                        encoders_info.append(self.codec_display_names.get("aac", "aac"))
+                    elif 'libvorbis' in line and 'libvorbis' not in self.supported_encoders:
+                        self.supported_encoders.append("libvorbis")
+                        encoders_info.append(self.codec_display_names.get("libvorbis", "libvorbis"))
+                    elif 'mp3' in line and 'mp3' not in self.supported_encoders:
+                        self.supported_encoders.append("mp3")
+                        encoders_info.append(self.codec_display_names.get("mp3", "mp3"))
+                    elif 'ac3' in line and 'ac3' not in self.supported_encoders:
+                        self.supported_encoders.append("ac3")
+                        encoders_info.append(self.codec_display_names.get("ac3", "ac3"))
+
+                # Фильтруем списки в GUI на основе поддерживаемых кодеков
+                self.filter_codec_options()
                     
                 if encoders_info:
-                    self.log("Доступные видеокодеки: " + ", ".join(encoders_info))
+                    self.log("Поддерживаемые кодеки: " + ", ".join(encoders_info))
                 else:
-                    self.log("Не найдено поддерживаемых видеокодеков!", "warning")
+                    self.log("Не найдено поддерживаемых кодеков!", "warning")
                     
             else:
                 raise Exception("FFmpeg вернул ошибку")
                 
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-            self.log(f"Ошибка: {e}", "error")
-            messagebox.showerror("Ошибка", 
-                               f"FFmpeg не найден или недоступен: {e}")
+            error_msg = f"FFmpeg не найден или недоступен: {e}"
+            self.log(f"Ошибка: {error_msg}", "error")
+            messagebox.showerror("Ошибка", error_msg)
             
+    def filter_codec_options(self):
+        """Фильтрует опции в выпадающих списках на основе поддерживаемых кодеков"""
+        # Получаем пользовательские названия для поддерживаемых видео кодеков
+        supported_video_display_names = [self.codec_display_names.get(c, c) for c in self.supported_encoders if c in ["libvvenc", "libx265", "libx264", "librav1e", "libvpx-vp9", "libaom-av1"]]
+        self.video_codec_combobox['values'] = supported_video_display_names
+        
+        # Получаем пользовательские названия для поддерживаемых аудио кодеков
+        supported_audio_display_names = [self.codec_display_names.get(c, c) for c in self.supported_encoders if c in ["libopus", "aac", "libvorbis", "mp3", "ac3"]]
+        self.audio_codec_combobox['values'] = supported_audio_display_names
+        
+        # Проверяем, поддерживается ли текущий выбранный кодек, если нет - выбираем первый доступный
+        current_video_tech_name = self.video_codec.get()
+        current_video_display_name = self.codec_display_names.get(current_video_tech_name, current_video_tech_name)
+        if current_video_display_name not in supported_video_display_names and supported_video_display_names:
+            self.video_codec_combobox.set(supported_video_display_names[0])
+            # Обновляем техническое имя
+            for tech_name, disp_name in self.codec_display_names.items():
+                if disp_name == supported_video_display_names[0]:
+                    self.video_codec.set(tech_name)
+                    break
+        
+        current_audio_tech_name = self.audio_codec.get()
+        current_audio_display_name = self.codec_display_names.get(current_audio_tech_name, current_audio_tech_name)
+        if current_audio_display_name not in supported_audio_display_names and supported_audio_display_names:
+            self.audio_codec_combobox.set(supported_audio_display_names[0])
+            # Обновляем техническое имя
+            for tech_name, disp_name in self.codec_display_names.items():
+                if disp_name == supported_audio_display_names[0]:
+                    self.audio_codec.set(tech_name)
+                    break
+
+    def show_ffmpeg_info(self):
+        """Показывает окно с информацией о FFmpeg"""
+        info_window = tk.Toplevel(self.root)
+        info_window.title("Информация о FFmpeg")
+        info_window.geometry("600x400")
+        info_window.resizable(True, True)
+        
+        # Текстовое поле с информацией
+        text_frame = ttk.Frame(info_window, padding="10")
+        text_frame.pack(fill=tk.BOTH, expand=True)
+        
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, font=('Consolas', 10),
+                             bg=self.colors['light'], fg=self.colors['dark'])
+        text_widget.insert(tk.END, f"Версия FFmpeg:\n{self.ffmpeg_version_info}\n\n")
+        text_widget.insert(tk.END, f"Конфигурация сборки:\n{self.ffmpeg_build_config}\n\n")
+        text_widget.insert(tk.END, "Поддерживаемые кодеки:\n")
+        for encoder in self.supported_encoders:
+            display_name = self.codec_display_names.get(encoder, encoder)
+            text_widget.insert(tk.END, f"  - {display_name}\n")
+        text_widget.config(state=tk.DISABLED)
+        
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Кнопка закрытия
+        button_frame = ttk.Frame(info_window)
+        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        ttk.Button(button_frame, text="Закрыть", command=info_window.destroy, style='Modern.TButton').pack()
+
     def log(self, message, level="info"):
         if level == "error":
             tag = "ERROR: "
-            color = self.colors['danger']
+            color = self.colors['danger'] # "#e74c3c"
         elif level == "warning":
             tag = "WARNING: "
-            color = self.colors['warning']
+            color = self.colors['warning'] # "#f39c12"
         elif level == "success":
             tag = "SUCCESS: "
-            color = self.colors['success']
+            color = self.colors['success'] # "#2ecc71"
         else:
             tag = ""
-            color = self.colors['dark']
+            color = self.colors['dark'] # "#333"
             
         self.log_text.insert(tk.END, f"{tag}{message}\n")
         self.log_text.see(tk.END)
@@ -653,6 +831,7 @@ class FFmpegConverter:
             '-threads', '0',  # Использовать все доступные ядра CPU
             '-b:v', self.video_bitrate.get(),
             '-s', self.video_resolution.get(),
+            # '-crf', self.video_quality.get(), # CRF может конфликтовать с -b:v, закомментировал
             '-r', self.video_fps.get(),
             '-c:a', self.audio_codec.get(),
             '-b:a', self.audio_bitrate.get(),
@@ -779,8 +958,8 @@ class FFmpegConverter:
         try:
             # Определяем путь к ffprobe
             ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
-            if not os.path.exists(ffprobe_path):
-                ffprobe_path = "ffprobe"
+            if not os.path.exists(ffprobe_path) or ffprobe_path == "ffprobe": # Если путь не по умолчанию или в PATH
+                 ffprobe_path = "ffprobe"
                 
             cmd = [
                 ffprobe_path,
