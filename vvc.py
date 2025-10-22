@@ -10,7 +10,7 @@ import re
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
 # Версия приложения
-VERSION = "v0.17"
+VERSION = "v0.22"
 
 class ToolTip:
     """Всплывающая подсказка для виджетов"""
@@ -97,18 +97,15 @@ class CodecManager:
         "librav1e": "AV1 (librav1e)",
         "libvpx-vp9": "VP9 (libvpx-vp9)",
         "libaom-av1": "AV1 (libaom-av1)",
-        "libx264": "H.264 (AVC/libx264)",
         # Аудио кодеки
         "libopus": "Opus (libopus)",
         "aac": "AAC",
         "libvorbis": "Vorbis (libvorbis)",
-        "mp3": "MP3",
-        "ac3": "AC3",
-        "libmp3lame": "MP3 (libmp3lame)"
+        "ac3": "AC3"
     }
     
-    VIDEO_CODECS = ["libvvenc", "libx265", "librav1e", "libvpx-vp9", "libaom-av1", "libx264"]
-    AUDIO_CODECS = ["libopus", "aac", "libvorbis", "mp3", "ac3", "libmp3lame"]
+    VIDEO_CODECS = ["libvvenc", "libx265", "librav1e", "libvpx-vp9", "libaom-av1"]
+    AUDIO_CODECS = ["libopus", "aac", "libvorbis", "ac3"]
     
     @staticmethod
     def get_display_name(codec):
@@ -214,6 +211,11 @@ class FFmpegConverter:
         self.video_preset = tk.StringVar(value=self.config.get("video_preset", "medium"))
         self.video_bitrate = tk.StringVar(value=self.config.get("video_bitrate", "384k"))
         self.video_resolution = tk.StringVar(value=self.config.get("video_resolution", "1280x720"))
+        self.resolution_mode = tk.StringVar(value=self.config.get("resolution_mode", "Исходное"))
+        self.custom_resolution = tk.StringVar(value=self.config.get("custom_resolution", "1280x720"))
+        # Обработчик изменения пользовательского разрешения
+        self.custom_resolution.trace('w', self.on_custom_resolution_change)
+        self.original_resolution = ""  # Будет установлено при автоопределении
         self.video_quality = tk.StringVar(value=self.config.get("video_quality", "25"))
         self.video_fps = tk.StringVar(value=self.config.get("video_fps", "30"))
         self.audio_codec = tk.StringVar(value=self.config.get("audio_codec", "libopus"))
@@ -441,16 +443,13 @@ class FFmpegConverter:
         
         # Параметры
         params_frame = ttk.Frame(content_frame, style='TFrame')
-        params_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        params_frame.pack(fill=tk.BOTH, expand=True)
         
         # Видео параметры
         self.create_video_section(params_frame)
         
         # Аудио параметры
         self.create_audio_section(params_frame)
-        
-        # Кнопки управления
-        self.create_control_section(content_frame)
         
         # Прогресс и логи
         self.create_progress_section(content_frame)
@@ -551,7 +550,26 @@ class FFmpegConverter:
         ttk.Label(frame, text="Разрешение:").grid(row=row, column=0, sticky=tk.W, pady=5)
         resolution_frame = ttk.Frame(frame)
         resolution_frame.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
-        ttk.Entry(resolution_frame, textvariable=self.video_resolution).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        resolution_frame.columnconfigure(1, weight=1)
+        
+        # Комбобокс с разрешениями
+        resolution_options = ["Исходное", "VGA (640x480)", "HD (1280x720)", "FHD (1920x1080)", "Особое"]
+        self.resolution_combobox = ttk.Combobox(resolution_frame, 
+                                                textvariable=self.resolution_mode,
+                                                values=resolution_options, 
+                                                state="readonly",
+                                                width=15)
+        self.resolution_combobox.grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        self.resolution_combobox.bind("<<ComboboxSelected>>", self.on_resolution_mode_change)
+        
+        # Поле для особого разрешения
+        self.custom_resolution_entry = ttk.Entry(resolution_frame, textvariable=self.custom_resolution)
+        self.custom_resolution_entry.grid(row=0, column=1, sticky=(tk.W, tk.E))
+        
+        # Изначально скрываем поле для особого разрешения
+        if self.resolution_mode.get() != "Особое":
+            self.custom_resolution_entry.grid_remove()
+        
         row += 1
         
         # FPS
@@ -579,8 +597,8 @@ class FFmpegConverter:
         self.video_codec.set(tech_name)
 
     def create_audio_section(self, parent):
-        """Создание секции параметров аудио"""
-        frame = ttk.LabelFrame(parent, text="Параметры аудио", padding="15")
+        """Создание секции параметров аудио и управления"""
+        frame = ttk.LabelFrame(parent, text="Параметры аудио и управление", padding="15")
         frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         frame.columnconfigure(1, weight=1)
         
@@ -603,36 +621,74 @@ class FFmpegConverter:
         bitrate_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(10, 0), pady=5)
         ttk.Entry(bitrate_frame, textvariable=self.audio_bitrate).pack(side=tk.LEFT, fill=tk.X, expand=True)
         
+        # Разделитель
+        separator = ttk.Separator(frame, orient='horizontal')
+        separator.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(15, 10))
+        
+        # Кнопки управления
+        button_frame = ttk.Frame(frame, style='TFrame')
+        button_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
+        button_frame.columnconfigure(0, weight=1)
+        
+        # Центральный контейнер для кнопок
+        buttons_container = ttk.Frame(button_frame, style='TFrame')
+        buttons_container.grid(row=0, column=0)
+        
+        self.convert_button = ttk.Button(buttons_container, text="Начать конвертацию", 
+                                       command=self.start_conversion, 
+                                       style='Modern.TButton',
+                                       width=20)
+        self.convert_button.grid(row=0, column=0, padx=(0, 5))
+        
+        self.stop_button = ttk.Button(buttons_container, text="Остановить", 
+                                    command=self.stop_conversion, 
+                                    state='disabled',
+                                    style='Secondary.TButton',
+                                    width=15)
+        self.stop_button.grid(row=0, column=1, padx=(5, 5))
+        
+        ttk.Button(buttons_container, text="Предпросмотр команды", 
+                  command=self.preview_command,
+                  style='Secondary.TButton',
+                  width=20).grid(row=0, column=2, padx=(5, 0))
+        
     def on_audio_codec_change(self, event):
         """Обработчик изменения выбора аудио кодека"""
         selected_display_name = self.audio_codec_combobox.get()
         tech_name = CodecManager.get_tech_name(selected_display_name)
         self.audio_codec.set(tech_name)
+    
+    def on_custom_resolution_change(self, *args):
+        """Обработчик изменения пользовательского разрешения"""
+        if self.resolution_mode.get() == "Особое":
+            self.video_resolution.set(self.custom_resolution.get())
+    
+    def on_resolution_mode_change(self, event):
+        """Обработчик изменения режима разрешения"""
+        mode = self.resolution_mode.get()
+        
+        if mode == "Особое":
+            # Показываем поле для ввода
+            self.custom_resolution_entry.grid()
+            self.video_resolution.set(self.custom_resolution.get())
+        else:
+            # Скрываем поле для ввода
+            self.custom_resolution_entry.grid_remove()
+            
+            # Устанавливаем разрешение в зависимости от выбранного режима
+            if mode == "Исходное":
+                if self.original_resolution:
+                    self.video_resolution.set(self.original_resolution)
+                else:
+                    self.video_resolution.set("1280x720")  # Значение по умолчанию
+            elif mode == "VGA (640x480)":
+                self.video_resolution.set("640x480")
+            elif mode == "HD (1280x720)":
+                self.video_resolution.set("1280x720")
+            elif mode == "FHD (1920x1080)":
+                self.video_resolution.set("1920x1080")
 
-    def create_control_section(self, parent):
-        """Создание секции управления"""
-        frame = ttk.Frame(parent, style='TFrame')
-        frame.pack(fill=tk.X, pady=(15, 15))
-        
-        # Кнопки
-        button_frame = ttk.Frame(frame, style='TFrame')
-        button_frame.pack()
-        
-        self.convert_button = ttk.Button(button_frame, text="Начать конвертацию", 
-                                       command=self.start_conversion, 
-                                       style='Modern.TButton')
-        self.convert_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.stop_button = ttk.Button(button_frame, text="Остановить", 
-                                    command=self.stop_conversion, 
-                                    state='disabled',
-                                    style='Secondary.TButton')
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(button_frame, text="Предпросмотр команды", 
-                  command=self.preview_command,
-                  style='Secondary.TButton').pack(side=tk.LEFT, padx=(0, 10))
-        
+    
     def create_progress_section(self, parent):
         """Создание секции прогресса и логов"""
         frame = ttk.LabelFrame(parent, text="Прогресс и логи", padding="15")
@@ -667,7 +723,7 @@ class FFmpegConverter:
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         
-        self.log_text = tk.Text(log_frame, height=12, wrap=tk.WORD, 
+        self.log_text = tk.Text(log_frame, height=9, wrap=tk.WORD, 
                                font=('Consolas', 9),
                                bg=self.colors['light'],
                                fg=self.colors['dark'],
@@ -688,7 +744,7 @@ class FFmpegConverter:
         frame.pack(fill=tk.X)
         frame.columnconfigure(1, weight=1)
         
-        # Информация о входном файле
+        # Информация о входном файле (компактный формат)
         ttk.Label(frame, text="Входной файл:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.input_info_label = ttk.Label(frame, text="Не выбран", background=self.colors['background'])
         self.input_info_label.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
@@ -788,15 +844,85 @@ class FFmpegConverter:
             self.update_file_info()
             
     def update_file_info(self):
-        """Обновление информации о файлах"""
+        """Обновление информации о файлах (компактный формат)"""
         input_path = self.input_file.get()
         output_path = self.output_file.get()
         
         # Информация о входном файле
         if input_path and os.path.exists(input_path):
+            info_parts = []
+            
+            # Размер файла
             size = os.path.getsize(input_path)
             size_str = self.format_file_size(size)
-            self.input_info_label.config(text=f"{size_str}")
+            info_parts.append(size_str)
+            
+            # Получаем подробную информацию
+            video_info = self.get_video_info(input_path)
+            
+            if video_info:
+                # Длительность
+                if video_info['duration']:
+                    duration_str = self.format_duration(video_info['duration'])
+                    info_parts.append(duration_str)
+                
+                # Формат (только короткое название)
+                if video_info['format']:
+                    format_name = video_info['format'].split(',')[0].split('/')[0].strip()
+                    if len(format_name) > 15:
+                        format_name = format_name[:12] + "..."
+                    info_parts.append(format_name)
+                
+                # Видео информация
+                video_parts = []
+                if video_info['video_codec']:
+                    # Извлекаем короткое название кодека
+                    codec_name = video_info['video_codec'].split('/')[0].strip()
+                    if '(' in codec_name:
+                        codec_name = codec_name.split('(')[0].strip()
+                    video_parts.append(codec_name[:15])
+                
+                if video_info['video_bitrate']:
+                    video_parts.append(video_info['video_bitrate'])
+                
+                if video_info['resolution']:
+                    res_fps = video_info['resolution']
+                    if video_info['fps']:
+                        res_fps += f"@{video_info['fps']}fps"
+                    video_parts.append(res_fps)
+                
+                if video_parts:
+                    info_parts.append(", ".join(video_parts))
+                
+                # Аудио информация
+                audio_parts = []
+                if video_info['audio_codec']:
+                    # Извлекаем короткое название кодека
+                    codec_name = video_info['audio_codec'].split('(')[0].strip()
+                    audio_parts.append(codec_name[:10])
+                
+                if video_info['audio_bitrate']:
+                    audio_parts.append(video_info['audio_bitrate'])
+                
+                if video_info['audio_channels']:
+                    # Извлекаем только лейаут (без цифры)
+                    if '(' in video_info['audio_channels']:
+                        layout = video_info['audio_channels'].split('(')[1].rstrip(')')
+                        audio_parts.append(layout.capitalize())
+                    else:
+                        audio_parts.append(f"{video_info['audio_channels']}ch")
+                
+                if video_info['audio_sample_rate']:
+                    audio_parts.append(video_info['audio_sample_rate'])
+                
+                if audio_parts:
+                    info_parts.append(", ".join(audio_parts))
+            
+            # Собираем всё в одну строку
+            if info_parts:
+                self.input_info_label.config(text=" | ".join(info_parts))
+            else:
+                self.input_info_label.config(text=size_str)
         else:
             self.input_info_label.config(text="Не выбран")
             
@@ -810,6 +936,21 @@ class FFmpegConverter:
             
         # Расчет экономии
         self.calculate_saving()
+    
+    def format_duration(self, seconds):
+        """Форматирование длительности видео"""
+        try:
+            seconds = int(float(seconds))
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            secs = seconds % 60
+            
+            if hours > 0:
+                return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+            else:
+                return f"{minutes:02d}:{secs:02d}"
+        except:
+            return "—"
         
     def format_file_size(self, size_bytes):
         """Форматирование размера файла"""
@@ -852,7 +993,14 @@ class FFmpegConverter:
         
         if video_info:
             if video_info['resolution']:
+                # Сохраняем исходное разрешение
+                self.original_resolution = video_info['resolution']
                 self.video_resolution.set(video_info['resolution'])
+                
+                # Устанавливаем режим "Исходное" по умолчанию
+                self.resolution_mode.set("Исходное")
+                self.custom_resolution_entry.grid_remove()
+                
                 self.log(f"Определено разрешение: {video_info['resolution']}", "info")
                 
             if video_info['fps']:
@@ -864,7 +1012,7 @@ class FFmpegConverter:
         self.root.config(cursor="")
             
     def get_video_info(self, filepath):
-        """Получение информации о видео файле"""
+        """Получение подробной информации о медиафайле"""
         try:
             if not os.path.exists(filepath):
                 return None
@@ -877,6 +1025,7 @@ class FFmpegConverter:
                 '-v', 'quiet',
                 '-print_format', 'json',
                 '-show_streams',
+                '-show_format',
                 filepath
             ]
             
@@ -885,35 +1034,100 @@ class FFmpegConverter:
             if result.returncode == 0:
                 data = json.loads(result.stdout)
                 
-                # Поиск видео потока
+                info = {
+                    'resolution': None,
+                    'fps': None,
+                    'video_codec': None,
+                    'video_bitrate': None,
+                    'audio_codec': None,
+                    'audio_bitrate': None,
+                    'duration': None,
+                    'format': None,
+                    'audio_channels': None,
+                    'audio_sample_rate': None
+                }
+                
+                # Получаем информацию о формате
+                format_data = data.get('format', {})
+                info['format'] = format_data.get('format_long_name', format_data.get('format_name', 'Неизвестен'))
+                
+                # Получаем длительность
+                duration = format_data.get('duration')
+                if duration:
+                    try:
+                        info['duration'] = float(duration)
+                    except:
+                        pass
+                
+                # Поиск видео и аудио потоков
                 for stream in data.get('streams', []):
-                    if stream.get('codec_type') == 'video':
-                        # Получение разрешения
+                    codec_type = stream.get('codec_type')
+                    
+                    if codec_type == 'video' and not info['video_codec']:
+                        # Видео информация
                         width = stream.get('width')
                         height = stream.get('height')
-                        resolution = f"{width}x{height}" if width and height else None
+                        info['resolution'] = f"{width}x{height}" if width and height else None
                         
-                        # Получение FPS
+                        # FPS
                         avg_frame_rate = stream.get('avg_frame_rate')
-                        fps = None
                         if avg_frame_rate and avg_frame_rate != '0/0':
                             try:
                                 num, den = map(int, avg_frame_rate.split('/'))
                                 if den != 0:
-                                    fps = str(int(num / den))
+                                    info['fps'] = str(int(num / den))
                             except:
                                 pass
                         
-                        return {
-                            'resolution': resolution,
-                            'fps': fps
-                        }
+                        # Видео кодек
+                        codec_name = stream.get('codec_long_name', stream.get('codec_name', 'Неизвестен'))
+                        info['video_codec'] = codec_name
+                        
+                        # Видео битрейт
+                        bitrate = stream.get('bit_rate')
+                        if bitrate:
+                            try:
+                                bitrate_kbps = int(bitrate) // 1000
+                                info['video_bitrate'] = f"{bitrate_kbps} kbps"
+                            except:
+                                pass
+                    
+                    elif codec_type == 'audio' and not info['audio_codec']:
+                        # Аудио информация
+                        codec_name = stream.get('codec_long_name', stream.get('codec_name', 'Неизвестен'))
+                        info['audio_codec'] = codec_name
+                        
+                        # Аудио битрейт
+                        bitrate = stream.get('bit_rate')
+                        if bitrate:
+                            try:
+                                bitrate_kbps = int(bitrate) // 1000
+                                info['audio_bitrate'] = f"{bitrate_kbps} kbps"
+                            except:
+                                pass
+                        
+                        # Количество каналов
+                        channels = stream.get('channels')
+                        if channels:
+                            channel_layout = stream.get('channel_layout', '')
+                            info['audio_channels'] = f"{channels} ({channel_layout})" if channel_layout else str(channels)
+                        
+                        # Частота дискретизации
+                        sample_rate = stream.get('sample_rate')
+                        if sample_rate:
+                            try:
+                                rate_khz = int(sample_rate) // 1000
+                                info['audio_sample_rate'] = f"{rate_khz} kHz"
+                            except:
+                                pass
+                
+                return info
             return None
         except subprocess.TimeoutExpired:
-            self.log("Превышено время ожидания при получении информации о видео", "warning")
+            self.log("Превышено время ожидания при получении информации о медиафайле", "warning")
             return None
         except Exception as e:
-            self.log(f"Ошибка при получении информации о видео: {e}", "warning")
+            self.log(f"Ошибка при получении информации о медиафайле: {e}", "warning")
             return None
     
     def get_ffprobe_path(self):
@@ -1372,6 +1586,8 @@ class FFmpegConverter:
         self.config["video_preset"] = self.video_preset.get()
         self.config["video_bitrate"] = self.video_bitrate.get()
         self.config["video_resolution"] = self.video_resolution.get()
+        self.config["resolution_mode"] = self.resolution_mode.get()
+        self.config["custom_resolution"] = self.custom_resolution.get()
         self.config["video_quality"] = self.video_quality.get()
         self.config["video_fps"] = self.video_fps.get()
         self.config["audio_codec"] = self.audio_codec.get()
